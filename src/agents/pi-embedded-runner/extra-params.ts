@@ -8,6 +8,7 @@ const OPENROUTER_APP_HEADERS: Record<string, string> = {
   "HTTP-Referer": "https://openclaw.ai",
   "X-Title": "OpenClaw",
 };
+const ASSISTANT_TEXT_PART_NORMALIZATION_PROVIDERS = new Set(["qianfan", "vivgrid"]);
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -117,6 +118,69 @@ function createOpenRouterHeadersWrapper(baseStreamFn: StreamFn | undefined): Str
     });
 }
 
+type OpenAiPayloadMessage = {
+  role?: unknown;
+  content?: unknown;
+};
+
+function flattenAssistantTextParts(content: unknown): string | null {
+  if (!Array.isArray(content) || content.length === 0) {
+    return null;
+  }
+  const textParts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      return null;
+    }
+    const record = block as { type?: unknown; text?: unknown };
+    if (record.type !== "text" || typeof record.text !== "string") {
+      return null;
+    }
+    textParts.push(record.text);
+  }
+  return textParts.join("");
+}
+
+function normalizeQianfanAssistantContentPayload(payload: unknown): void {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  const messages = (payload as { messages?: unknown }).messages;
+  if (!Array.isArray(messages)) {
+    return;
+  }
+
+  for (const message of messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const record = message as OpenAiPayloadMessage;
+    if (record.role !== "assistant") {
+      continue;
+    }
+    const flattened = flattenAssistantTextParts(record.content);
+    if (flattened === null) {
+      continue;
+    }
+    record.content = flattened;
+  }
+}
+
+function createQianfanAssistantContentWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    underlying(model, context, {
+      ...options,
+      onPayload: (payload: unknown) => {
+        // Qianfan DeepSeek currently mis-parses assistant text-part arrays and can
+        // echo them back literally ("[{'type':'text','text':...}]"). Flattening
+        // assistant text parts to a plain string prevents recursive nesting.
+        normalizeQianfanAssistantContentPayload(payload);
+        options?.onPayload?.(payload);
+      },
+    });
+}
+
 /**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
@@ -152,5 +216,11 @@ export function applyExtraParamsToAgent(
   if (provider === "openrouter") {
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
     agent.streamFn = createOpenRouterHeadersWrapper(agent.streamFn);
+  }
+
+  const normalizedProvider = provider.trim().toLowerCase();
+  if (ASSISTANT_TEXT_PART_NORMALIZATION_PROVIDERS.has(normalizedProvider)) {
+    log.debug(`applying assistant content normalization for ${provider}/${modelId}`);
+    agent.streamFn = createQianfanAssistantContentWrapper(agent.streamFn);
   }
 }

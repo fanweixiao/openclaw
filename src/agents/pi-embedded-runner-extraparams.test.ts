@@ -91,4 +91,97 @@ describe("applyExtraParamsToAgent", () => {
       "X-Custom": "1",
     });
   });
+
+  it("normalizes qianfan assistant text-part arrays to plain strings in payload", () => {
+    let capturedOptions: SimpleStreamOptions | undefined;
+    const onPayloadCalls: unknown[] = [];
+
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedOptions = options;
+      return new AssistantMessageEventStream();
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "qianfan", "deepseek-v3.2");
+
+    const model = {
+      api: "openai-completions",
+      provider: "qianfan",
+      id: "deepseek-v3.2",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {
+      onPayload: (payload) => onPayloadCalls.push(payload),
+    });
+
+    const payload = {
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "hello " },
+            { type: "text", text: "world" },
+          ],
+        },
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [{ id: "call_1", type: "function", function: { name: "x", arguments: "{}" } }],
+        },
+        {
+          role: "user",
+          content: [{ type: "text", text: "unchanged" }],
+        },
+      ],
+    };
+
+    capturedOptions?.onPayload?.(payload);
+
+    expect(payload.messages[0]?.content).toBe("hello world");
+    expect(payload.messages[1]?.content).toBeNull();
+    expect(payload.messages[2]?.content).toEqual([{ type: "text", text: "unchanged" }]);
+    expect(onPayloadCalls).toEqual([payload]);
+  });
+
+  it("normalizes vivgrid assistant text-part arrays to plain strings in payload", () => {
+    let capturedOptions: SimpleStreamOptions | undefined;
+    const onPayloadCalls: unknown[] = [];
+
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedOptions = options;
+      return new AssistantMessageEventStream();
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "vivgrid", "auto");
+
+    const model = {
+      api: "openai-completions",
+      provider: "vivgrid",
+      id: "auto",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {
+      onPayload: (payload) => onPayloadCalls.push(payload),
+    });
+
+    const payload = {
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "alpha " },
+            { type: "text", text: "beta" },
+          ],
+        },
+      ],
+    };
+
+    capturedOptions?.onPayload?.(payload);
+
+    expect(payload.messages[0]?.content).toBe("alpha beta");
+    expect(onPayloadCalls).toEqual([payload]);
+  });
 });
